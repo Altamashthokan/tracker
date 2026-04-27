@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -30,6 +31,7 @@
     .vessel {
       border-bottom: 1px solid #333;
       padding: 10px 0;
+      font-size: 14px;
     }
 
     #map {
@@ -41,7 +43,7 @@
 <body>
 
 <div id="sidebar">
-  <h2>Vessel Status</h2>
+  <h2>🚢 Vessel Status</h2>
   <div id="vesselList"></div>
 </div>
 
@@ -51,71 +53,86 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <script>
+// ================= CONFIG =================
 const API_KEY = "9a60170cb54290d271c628a0d990b7b988589a46";
 
-// Your vessels
 const vessels = {
-  "Hazi 1": { mmsi: "649081582" },
-  "DIB": { mmsi: "306708000" },
-  "Al Tarf": { mmsi: "678000441" },
-  "Glory 1": { mmsi: "341368002" },
-  "Arabian Energy": { mmsi: "306295000" }
+  "Hazi 1": { mmsi: 649081582 },
+  "DIB": { mmsi: 306708000 },
+  "Al Tarf": { mmsi: 678000441 },
+  "Glory 1": { mmsi: 341368002 },
+  "Arabian Energy": { mmsi: 306295000 }
 };
 
+// Map MMSI -> Name
 const mmsiToName = {};
 Object.keys(vessels).forEach(name => {
   mmsiToName[vessels[name].mmsi] = name;
 });
 
-// Init map
-const map = L.map('map').setView([25.2, 55.3], 6);
+// ================= MAP =================
+const map = L.map('map').setView([25.2, 55.3], 5);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 18,
 }).addTo(map);
 
-// Store markers
 const markers = {};
 
-// Sidebar update
+// ================= UI =================
 function updateSidebar(name, data) {
-  const el = document.getElementById("vessel-" + name) || document.createElement("div");
+  let el = document.getElementById("vessel-" + name);
 
-  el.id = "vessel-" + name;
-  el.className = "vessel";
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "vessel-" + name;
+    el.className = "vessel";
+    document.getElementById("vesselList").appendChild(el);
+  }
 
   el.innerHTML = `
     <strong>${name}</strong><br>
-    Lat: ${data.lat?.toFixed(4)}<br>
-    Lon: ${data.lon?.toFixed(4)}<br>
+    Lat: ${data.lat.toFixed(4)}<br>
+    Lon: ${data.lon.toFixed(4)}<br>
     Speed: ${data.sog || 0} kn<br>
     Heading: ${data.cog || 0}°<br>
     Updated: ${new Date().toLocaleTimeString()}
   `;
-
-  document.getElementById("vesselList").appendChild(el);
 }
 
-// Connect WebSocket
+// ================= AIS STREAM =================
 const socket = new WebSocket("wss://stream.aisstream.io/v0/stream");
 
 socket.onopen = () => {
-  console.log("Connected to AISStream");
+  console.log("✅ Connected to AISStream");
 
   socket.send(JSON.stringify({
     APIKey: API_KEY,
-    BoundingBoxes: [[[-90, -180], [90, 180]]], // global
-    FiltersShipMMSI: Object.keys(mmsiToName)
+
+    // You can switch to global if needed
+    BoundingBoxes: [[[20, 40], [30, 60]]],
+
+    Filters: {
+      MMSI: Object.keys(mmsiToName).map(Number)
+    }
   }));
 };
 
 socket.onmessage = (event) => {
   const data = JSON.parse(event.data);
 
-  if (!data.PositionReport) return;
+  let report = null;
 
-  const report = data.PositionReport;
-  const mmsi = report.MMSI.toString();
+  // Handle multiple AIS message types
+  if (data.PositionReport) {
+    report = data.PositionReport;
+  } else if (data.StandardClassBPositionReport) {
+    report = data.StandardClassBPositionReport;
+  }
+
+  if (!report) return;
+
+  const mmsi = report.MMSI;
 
   if (!mmsiToName[mmsi]) return;
 
@@ -123,28 +140,34 @@ socket.onmessage = (event) => {
 
   const lat = report.Latitude;
   const lon = report.Longitude;
+
+  if (!lat || !lon) return;
+
   const sog = report.Sog;
   const cog = report.Cog;
 
-  // Update marker
+  // Marker update
   if (!markers[mmsi]) {
     markers[mmsi] = L.marker([lat, lon])
       .addTo(map)
-      .bindPopup(name);
+      .bindPopup(name)
+      .openPopup();
   } else {
     markers[mmsi].setLatLng([lat, lon]);
   }
 
   // Update sidebar
   updateSidebar(name, { lat, lon, sog, cog });
+
+  console.log("📍 Updated:", name);
 };
 
 socket.onerror = (err) => {
-  console.error("WebSocket error:", err);
+  console.error("❌ WebSocket Error:", err);
 };
 
 socket.onclose = () => {
-  console.log("Disconnected from AISStream");
+  console.log("⚠️ Disconnected from AISStream");
 };
 </script>
 
