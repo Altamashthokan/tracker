@@ -2,54 +2,33 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Vessel Tracking Dashboard</title>
+<meta charset="UTF-8">
+<title>Vessel Tracker (Free Plan Hack)</title>
 
-  <!-- Leaflet CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
-  <style>
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      display: flex;
-      height: 100vh;
-    }
-
-    #sidebar {
-      width: 300px;
-      background: #111;
-      color: #fff;
-      padding: 15px;
-      overflow-y: auto;
-    }
-
-    #sidebar h2 {
-      margin-top: 0;
-    }
-
-    .vessel {
-      border-bottom: 1px solid #333;
-      padding: 10px 0;
-      font-size: 14px;
-    }
-
-    #map {
-      flex: 1;
-    }
-  </style>
+<style>
+body { margin:0; display:flex; font-family:Arial; }
+#map { flex:1; }
+#sidebar {
+  width:300px; background:#111; color:#fff;
+  padding:15px; overflow-y:auto;
+}
+.vessel { border-bottom:1px solid #333; padding:10px 0; }
+.live { color:#00ff88; }
+.stale { color:#ffaa00; }
+</style>
 </head>
 
 <body>
 
 <div id="sidebar">
-  <h2>🚢 Vessel Status</h2>
-  <div id="vesselList"></div>
+  <h2>🚢 My Vessels</h2>
+  <div id="list"></div>
 </div>
 
 <div id="map"></div>
 
-<!-- Leaflet JS -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <script>
@@ -57,86 +36,78 @@
 const API_KEY = "9a60170cb54290d271c628a0d990b7b988589a46";
 
 const vessels = {
-  "Hazi 1": { mmsi: 649081582 },
-  "DIB": { mmsi: 306708000 },
-  "Al Tarf": { mmsi: 678000441 },
-  "Glory 1": { mmsi: 341368002 },
-  "Arabian Energy": { mmsi: 306295000 }
+  649081582: "Hazi 1",
+  306708000: "DIB",
+  678000441: "Al Tarf",
+  341368002: "Glory 1",
+  306295000: "Arabian Energy"
 };
 
-// Map MMSI -> Name
-const mmsiToName = {};
-Object.keys(vessels).forEach(name => {
-  mmsiToName[vessels[name].mmsi] = name;
-});
+// Store last seen
+const vesselState = {};
+const markers = {};
 
 // ================= MAP =================
 const map = L.map('map').setView([25.2, 55.3], 5);
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 18,
-}).addTo(map);
-
-const markers = {};
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
 // ================= UI =================
-function updateSidebar(name, data) {
-  let el = document.getElementById("vessel-" + name);
+function updateUI() {
+  const container = document.getElementById("list");
+  container.innerHTML = "";
 
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "vessel-" + name;
-    el.className = "vessel";
-    document.getElementById("vesselList").appendChild(el);
-  }
+  Object.keys(vessels).forEach(mmsi => {
+    const v = vesselState[mmsi];
+    const name = vessels[mmsi];
 
-  el.innerHTML = `
-    <strong>${name}</strong><br>
-    Lat: ${data.lat.toFixed(4)}<br>
-    Lon: ${data.lon.toFixed(4)}<br>
-    Speed: ${data.sog || 0} kn<br>
-    Heading: ${data.cog || 0}°<br>
-    Updated: ${new Date().toLocaleTimeString()}
-  `;
+    if (!v) {
+      container.innerHTML += `<div class="vessel">${name}<br>❌ Not detected</div>`;
+      return;
+    }
+
+    const age = (Date.now() - v.time) / 1000;
+    const status = age < 120 ? "live" : "stale";
+
+    container.innerHTML += `
+      <div class="vessel ${status}">
+        <strong>${name}</strong><br>
+        ${status === "live" ? "🟢 Live" : "🟡 Last Seen"}<br>
+        Lat: ${v.lat.toFixed(3)}<br>
+        Lon: ${v.lon.toFixed(3)}<br>
+        Speed: ${v.sog || 0} kn
+      </div>
+    `;
+  });
 }
 
 // ================= AIS STREAM =================
 const socket = new WebSocket("wss://stream.aisstream.io/v0/stream");
 
 socket.onopen = () => {
-  console.log("✅ Connected to AISStream");
+  console.log("✅ Connected");
 
   socket.send(JSON.stringify({
     APIKey: API_KEY,
 
-    // You can switch to global if needed
-    BoundingBoxes: [[[20, 40], [30, 60]]],
-
-    Filters: {
-      MMSI: Object.keys(mmsiToName).map(Number)
-    }
+    // Focus region (VERY IMPORTANT)
+    BoundingBoxes: [
+      [[20, 40], [30, 60]],   // UAE / Gulf
+      [[5, 60], [25, 80]]     // India routes
+    ]
   }));
 };
 
 socket.onmessage = (event) => {
   const data = JSON.parse(event.data);
 
-  let report = null;
-
-  // Handle multiple AIS message types
-  if (data.PositionReport) {
-    report = data.PositionReport;
-  } else if (data.StandardClassBPositionReport) {
-    report = data.StandardClassBPositionReport;
-  }
-
+  let report = data.PositionReport || data.StandardClassBPositionReport;
   if (!report) return;
 
   const mmsi = report.MMSI;
 
-  if (!mmsiToName[mmsi]) return;
-
-  const name = mmsiToName[mmsi];
+  // Only care about YOUR vessels
+  if (!vessels[mmsi]) return;
 
   const lat = report.Latitude;
   const lon = report.Longitude;
@@ -144,31 +115,32 @@ socket.onmessage = (event) => {
   if (!lat || !lon) return;
 
   const sog = report.Sog;
-  const cog = report.Cog;
 
-  // Marker update
+  // Save state
+  vesselState[mmsi] = {
+    lat, lon, sog,
+    time: Date.now()
+  };
+
+  // Map marker
   if (!markers[mmsi]) {
     markers[mmsi] = L.marker([lat, lon])
       .addTo(map)
-      .bindPopup(name)
-      .openPopup();
+      .bindPopup(vessels[mmsi]);
   } else {
     markers[mmsi].setLatLng([lat, lon]);
   }
 
-  // Update sidebar
-  updateSidebar(name, { lat, lon, sog, cog });
-
-  console.log("📍 Updated:", name);
+  console.log("🎯 Detected:", vessels[mmsi]);
+  updateUI();
 };
 
-socket.onerror = (err) => {
-  console.error("❌ WebSocket Error:", err);
-};
+socket.onerror = (e) => console.error("Error", e);
+socket.onclose = () => console.log("Closed");
 
-socket.onclose = () => {
-  console.log("⚠️ Disconnected from AISStream");
-};
+// Refresh UI every 10 sec (for stale status)
+setInterval(updateUI, 10000);
+
 </script>
 
 </body>
